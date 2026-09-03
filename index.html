@@ -1,0 +1,348 @@
+<!doctype html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+
+  <title>PowerPoint WebView PoC</title>
+
+  <style>
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+
+      width: 100%;
+      height: 100%;
+
+      overflow: hidden;
+
+      background: transparent;
+
+      font-family:
+        "Segoe UI",
+        sans-serif;
+    }
+
+    body {
+      display: inline-block;
+    }
+
+    #toolbar {
+      display: inline-flex;
+
+      gap: 4px;
+
+      padding: 5px;
+
+      box-sizing: border-box;
+
+      background:
+        rgba(255, 255, 255, 0.98);
+
+      border:
+        1px solid rgba(0, 0, 0, 0.20);
+
+      border-radius: 6px;
+
+      white-space: nowrap;
+    }
+
+    button {
+      height: 34px;
+
+      padding:
+        0 12px;
+
+      border:
+        1px solid #b7b7b7;
+
+      border-radius: 4px;
+
+      background: #ffffff;
+
+      color: #222;
+
+      font-size: 13px;
+
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #f2f2f2;
+    }
+
+    button:active {
+      background: #e6e6e6;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="toolbar">
+    <button
+      id="random-color"
+      type="button"
+    >
+      ランダム色
+    </button>
+
+    <button
+      id="random-number"
+      type="button"
+    >
+      ランダム数字
+    </button>
+  </div>
+
+  <script>
+    const ppt =
+      chrome.webview.hostObjects.sync.ppt;
+
+    const overlay =
+      chrome.webview.hostObjects.sync.overlay;
+
+    const toolbar =
+      document.querySelector("#toolbar");
+
+    let lastX = null;
+    let lastY = null;
+    let lastWidth = null;
+    let lastHeight = null;
+    let isOffscreen = false;
+
+    /*
+     * Shape選択状態と位置を定期確認。
+     *
+     * PowerPointでドラッグ中は
+     * COM呼び出しが止まることがあるため、
+     * 実際にはマウスを離した直後に追従する。
+     */
+    function updateOverlayPosition() {
+      try {
+        const powerPointWindow =
+          ppt.ActiveWindow;
+
+        const selection =
+          powerPointWindow.Selection;
+
+        // ppSelectionShapes = 2
+        if (selection.Type !== 2) {
+          moveOffscreen();
+          return;
+        }
+
+        const shapes =
+          selection.ShapeRange;
+
+        /*
+         * 選択範囲の右上。
+         */
+        const x =
+          shapes.Left +
+          shapes.Width;
+
+        const y =
+          shapes.Top;
+
+        /*
+         * PowerPoint point
+         *     ↓
+         * Windows screen pixel
+         */
+        const screenX =
+          powerPointWindow
+            .PointsToScreenPixelsX(x);
+
+        const screenY =
+          powerPointWindow
+            .PointsToScreenPixelsY(y);
+
+        /*
+         * HTML実寸から
+         * WPF Windowサイズも決める。
+         */
+        const rect =
+          toolbar.getBoundingClientRect();
+
+        const width =
+          Math.ceil(rect.width);
+
+        const height =
+          Math.ceil(rect.height);
+
+        /*
+         * PowerPointから得る座標は
+         * physical pixel。
+         *
+         * 右側へ8 CSS px程度空ける。
+         */
+        const dpr =
+          window.devicePixelRatio || 1;
+
+        const targetX =
+          screenX +
+          (8 * dpr);
+
+        const targetY =
+          screenY;
+
+        /*
+         * 位置が変わった時だけ
+         * Native Windowを更新。
+         */
+        if (
+          targetX !== lastX ||
+          targetY !== lastY ||
+          width !== lastWidth ||
+          height !== lastHeight ||
+          isOffscreen
+        ) {
+          overlay.SetBounds(
+            targetX,
+            targetY,
+            width,
+            height
+          );
+
+          lastX =
+            targetX;
+
+          lastY =
+            targetY;
+
+          lastWidth =
+            width;
+
+          lastHeight =
+            height;
+
+          isOffscreen =
+            false;
+        }
+      }
+      catch (error) {
+        moveOffscreen();
+      }
+    }
+
+    function moveOffscreen() {
+      if (isOffscreen) {
+        return;
+      }
+
+      overlay.MoveOffscreen();
+
+      isOffscreen = true;
+      lastX = null;
+      lastY = null;
+    }
+
+    function getSelectedShape() {
+      const selection =
+        ppt.ActiveWindow.Selection;
+
+      // ppSelectionShapes = 2
+      if (selection.Type !== 2) {
+        throw new Error(
+          "Shapeが選択されていません"
+        );
+      }
+
+      return selection
+        .ShapeRange
+        .Item(1);
+    }
+
+    /*
+     * OfficeのRGB値は
+     *
+     * R + G*256 + B*65536
+     *
+     * の整数として渡せる。
+     */
+    function createRandomOfficeRgb() {
+      const r =
+        Math.floor(
+          Math.random() * 256
+        );
+
+      const g =
+        Math.floor(
+          Math.random() * 256
+        );
+
+      const b =
+        Math.floor(
+          Math.random() * 256
+        );
+
+      return (
+        r +
+        (g << 8) +
+        (b << 16)
+      );
+    }
+
+    document
+      .querySelector("#random-color")
+      .addEventListener(
+        "click",
+        () => {
+          try {
+            const shape =
+              getSelectedShape();
+
+            shape.Fill.Solid();
+
+            shape.Fill.ForeColor.RGB =
+              createRandomOfficeRgb();
+
+            shape.Fill.Transparency =
+              0;
+          }
+          catch (error) {
+            console.error(error);
+          }
+        }
+      );
+
+    document
+      .querySelector("#random-number")
+      .addEventListener(
+        "click",
+        () => {
+          try {
+            const shape =
+              getSelectedShape();
+
+            const value =
+              Math.floor(
+                Math.random() * 10000
+              );
+
+            shape
+              .TextFrame
+              .TextRange
+              .Text =
+                String(value);
+          }
+          catch (error) {
+            console.error(error);
+          }
+        }
+      );
+
+    /*
+     * C#のSelectionChangeイベントは使わない。
+     * Web側から直接PowerPoint COMを確認する。
+     */
+    setInterval(
+      updateOverlayPosition,
+      100
+    );
+
+    updateOverlayPosition();
+  </script>
+</body>
+</html>
